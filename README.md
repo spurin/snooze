@@ -154,7 +154,7 @@ This tells **snooze** to listen on port **8080** and respond with `"Hello from c
 
 If you prefer to keep your message in a ConfigMap (for example, to serve HTML with `<head>` and `<body>` tags), you can do this:
 
-1. **Create a ConfigMap**:
+**Create a ConfigMap and Deployment**:
 
 ```yaml
 apiVersion: v1
@@ -170,11 +170,7 @@ data:
       <p>We can store any HTML here.</p>
     </body>
     </html>
-```
-
-2. **Reference it in your Deployment**:
-
-```yaml
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -209,6 +205,162 @@ spec:
 
 With this setup, **snooze** reads your HTML from the `MESSAGE` environment variable. When you make a request to port **8080**, you’ll receive your entire HTML from the ConfigMap.
 
+### 4. Multi-Path Ingress Example
+
+Below is a demonstration of path-based routing across three color-coded Deployments and Services. Each path (/red, /green, /blue) points to a different instance of snooze, each listening on a distinct port and returning a unique message.
+
+```yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snooze-red
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: snooze-red
+  template:
+    metadata:
+      labels:
+        app: snooze-red
+    spec:
+      containers:
+      - name: snooze
+        image: spurin/snooze:latest
+        args:
+          - "--port=8081"
+          - "--message=RED!"
+        ports:
+        - containerPort: 8081
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: snooze-red-service
+spec:
+  selector:
+    app: snooze-red
+  ports:
+    - port: 80
+      targetPort: 8081
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snooze-green
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: snooze-green
+  template:
+    metadata:
+      labels:
+        app: snooze-green
+    spec:
+      containers:
+      - name: snooze
+        image: spurin/snooze:latest
+        args:
+          - "--port=8082"
+          - "--message=GREEN!"
+        ports:
+        - containerPort: 8082
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: snooze-green-service
+spec:
+  selector:
+    app: snooze-green
+  ports:
+    - port: 80
+      targetPort: 8082
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snooze-blue
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: snooze-blue
+  template:
+    metadata:
+      labels:
+        app: snooze-blue
+    spec:
+      containers:
+      - name: snooze
+        image: spurin/snooze:latest
+        args:
+          - "--port=8083"
+          - "--message=BLUE!"
+        ports:
+        - containerPort: 8083
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: snooze-blue-service
+spec:
+  selector:
+    app: snooze-blue
+  ports:
+    - port: 80
+      targetPort: 8083
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: snooze-colors-ingress
+spec:
+  rules:
+    - host: snooze.example.com
+      http:
+        paths:
+          - path: /red
+            pathType: Prefix
+            backend:
+              service:
+                name: snooze-red-service
+                port:
+                  number: 80
+          - path: /green
+            pathType: Prefix
+            backend:
+              service:
+                name: snooze-green-service
+                port:
+                  number: 80
+          - path: /blue
+            pathType: Prefix
+            backend:
+              service:
+                name: snooze-blue-service
+                port:
+                  number: 80
+```
+
+Three Deployments (snooze-red, snooze-green, snooze-blue) each run snooze on different ports (8081, 8082, 8083) with distinct messages (RED!, GREEN!, BLUE!).
+
+Three ClusterIP Services route traffic from port 80 to each respective containerPort.
+
+The Ingress resource routes:
+
+- /red to snooze-red-service
+- /green to snooze-green-service
+- /blue to snooze-blue-service
+
 ---
 
 ## Cleanup / Removal
@@ -220,6 +372,11 @@ kubectl delete deployment snooze
 kubectl delete deployment snooze-override-cmd
 kubectl delete deployment snooze-config-deploy
 kubectl delete configmap snooze-config
+kubectl delete deployment snooze-red
+kubectl delete deployment snooze-green
+kubectl delete deployment snooze-blue
+kubectl delete svc snooze-red-service snooze-green-service snooze-blue-service
+kubectl delete ingress snooze-colors-ingress
 ```
 
 ---
