@@ -4,7 +4,7 @@
   <img src="snooze_logo.svg" width="30%" alt="Snooze Logo">
 </p>
 
-Ever wanted an HTTP server that does *almost nothing*, but does it with style? **snooze** is here to serve you—literally. Based on the same ultra-minimal philosophy as [idle](https://github.com/spurin/idle), **snooze** listens on a single port, sends a static response, and then goes right back to its nap.
+Ever wanted an HTTP server that does *almost nothing*, but does it with style? **snooze** is here to serve you-literally. Based on the same ultra-minimal philosophy as [idle](https://github.com/spurin/idle), **snooze** listens on a single port, sends a static response, and then goes right back to its nap.
 
 ## Features
 
@@ -227,11 +227,11 @@ kubectl delete configmap snooze-config
 ## Why snooze?
 
 - **Test & Debug**: Perfect for verifying Kubernetes Ingress, load balancers, or quick dev checks.
-- **Simplicity**: No overhead from large frameworks—just a tiny compiled binary.
-- **Minimal Attack Surface**: Less code, fewer dependencies—less to go wrong.
+- **Simplicity**: No overhead from large frameworks-just a tiny compiled binary.
+- **Minimal Attack Surface**: Less code, fewer dependencies-less to go wrong.
 - **Education**: Great example of how to create a statically linked, scratch-based HTTP container.
 
 ## License
 
-This project is released into the public domain under [The Unlicense](http://unlicense.org).  
-Feel free to do whatever you want with it—no strings attached.
+This project is released into the public domain under [Unlicense](http://unlicense.org).  
+Feel free to do whatever you want with it-no strings attached.
