@@ -409,3 +409,7 @@ kubectl delete ingress snooze-colors-ingress
 
 This project is released into the public domain under [Unlicense](http://unlicense.org).
 Feel free to do whatever you want with it-no strings attached.
+
+## Thanks! 🙏
+
+[@edsiper](https://github.com/edsiper)
