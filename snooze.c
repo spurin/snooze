@@ -87,33 +87,6 @@ static void parse_arguments(int argc, char *argv[], int *port, const char **mess
                 exit(EXIT_FAILURE);
         }
     }
-
-
-    // // 3) Check command-line flags only if environment did NOT supply them
-    // //    (environment variables override flags)
-    // for (int i = 1; i < argc; i++) {
-    //     // Format: --port=XXXX
-    //     if (strncmp(argv[i], "--port=", 7) == 0) {
-    //         // Only apply if PORT env wasn't set
-    //         if (!env_port) {
-    //             const char *val = argv[i] + 7;
-    //             int cli_p = atoi(val);
-    //             if (cli_p > 0) {
-    //                 *port = cli_p;
-    //             }
-    //         }
-    //     }
-    //     // Format: --message=XXXX
-    //     else if (strncmp(argv[i], "--message=", 10) == 0) {
-    //         // Only apply if MESSAGE env wasn't set
-    //         if (!env_message) {
-    //             const char *val = argv[i] + 10;
-    //             if (*val) {
-    //                 *message = val;
-    //             }
-    //         }
-    //     }
-    // }
 }
 
 // Minimal HTTP response helper
