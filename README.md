@@ -12,9 +12,9 @@ Ever wanted an HTTP server that does *almost nothing*, but does it with style? *
 - **Default Port**: `80`, so you don’t have to think too hard.
 - **Default Message**: `"Hello from snooze!"`, because sometimes that’s all you need.
 - **Flexible Overriding**:
-  - **Environment Variables**: `PORT`, `MESSAGE`  
+  - **Environment Variables**: `PORT`, `MESSAGE`
     (Highest priority: if these are set, they override everything else.)
-  - **Command-Line Flags**: `--port=YOUR_PORT`, `--message=YOUR_MESSAGE`  
+  - **Command-Line Flags**: `--port=YOUR_PORT`, `--message=YOUR_MESSAGE`
     (Used only if environment variables are **not** set for those fields. You can set either one independently without affecting the other.)
   - **Defaults**: If neither environment variables nor command-line flags are provided, snooze uses `80` and `"Hello from snooze!"`.
 - **Graceful Shutdown**: Handles `SIGINT` and `SIGTERM`, letting you put it to bed without fuss.
@@ -22,6 +22,23 @@ Ever wanted an HTTP server that does *almost nothing*, but does it with style? *
 ```plaintext
 docker pull spurin/snooze:latest
 ```
+## Build (Optional)
+
+If you want to build **snooze** yourself you need the following dependencies:
+
+- gcc or clang
+- make
+- cmake
+
+To build **snooze**:
+
+```bash
+cd build/
+cmake ..
+make
+```
+
+then you will find the _snooze_ binary in the `build/` directory.
 
 ## Quick Start (Docker)
 
@@ -390,5 +407,5 @@ kubectl delete ingress snooze-colors-ingress
 
 ## License
 
-This project is released into the public domain under [Unlicense](http://unlicense.org).  
+This project is released into the public domain under [Unlicense](http://unlicense.org).
 Feel free to do whatever you want with it-no strings attached.
