@@ -11,6 +11,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <stdarg.h>
+#include <ctype.h> // Add this for isdigit
 
 #define DEFAULT_MESSAGE "Hello from snooze!\n"
 #define DEFAULT_PORT    80
@@ -200,6 +201,22 @@ static void extract_path(const char *reqbuf, char *path, size_t path_size) {
     path[path_size - 1] = '\0';
 }
 
+// Helper to check if path matches /snooze/<number> and extract number
+static int parse_snooze_path(const char *path, int *timesec) {
+    if (strncmp(path, "/snooze/", 8) == 0) {
+        const char *numstr = path + 8;
+        if (*numstr) {
+            // Ensure all chars are digits
+            for (const char *p = numstr; *p; ++p) {
+                if (!isdigit((unsigned char)*p)) return 0;
+            }
+            *timesec = atoi(numstr);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
     int ret;
     int port;
@@ -252,7 +269,14 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    log_msg(LOG_INFO, "\"msg\":\"snooze is listening on port %d\"", port);
+    // Before main server loop
+    time_t start_now = time(NULL);
+    char start_timebuf[64];
+    struct tm start_tm;
+    localtime_r(&start_now, &start_tm);
+    strftime(start_timebuf, sizeof(start_timebuf), "%Y-%m-%dT%H:%M:%S%z", &start_tm);
+
+    log_msg(LOG_INFO, "\"msg\":\"snooze is listening on port %d\",\"ts\":\"%s\"", port, start_timebuf);
 
     // Main server loop
     while (keep_running) {
@@ -269,6 +293,13 @@ int main(int argc, char *argv[]) {
         struct timeval start, end;
         gettimeofday(&start, NULL);
 
+        // Add this block to define and fill timebuf
+        time_t now = time(NULL);
+        char timebuf[64];
+        struct tm tm;
+        localtime_r(&now, &tm);
+        strftime(timebuf, sizeof(timebuf), "%Y-%m-%dT%H:%M:%S%z", &tm);
+
         // Read HTTP request (just first line)
         char reqbuf[256] = {0};
         ssize_t n = recv(client_fd, reqbuf, sizeof(reqbuf) - 1, 0);
@@ -278,16 +309,6 @@ int main(int argc, char *argv[]) {
             extract_method(reqbuf, method, sizeof(method));
         }
 
-        gettimeofday(&end, NULL);
-        double exec_len = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1e6;
-
-        // Log to stdout
-        time_t now = time(NULL);
-        char timebuf[64];
-        struct tm tm;
-        localtime_r(&now, &tm);
-        strftime(timebuf, sizeof(timebuf), "%Y-%m-%dT%H:%M:%S%z", &tm);
-
         // Extract User-Agent header from request
         char agent[128];
         extract_user_agent(reqbuf, agent, sizeof(agent));
@@ -296,17 +317,35 @@ int main(int argc, char *argv[]) {
         char path[128];
         extract_path(reqbuf, path, sizeof(path));
 
-        log_msg(LOG_INFO,
-            "\"method\":\"%s\",\"uri\":\"%s\",\"ts\":\"%s\",\"exec_time\":\"%.4f\",\"agent\":\"%s\"",
-            method, path, timebuf, exec_len, agent);
-
-        // Send minimal HTTP response
-        send_http_response(client_fd, message);
+        int snooze_sec = 0;
+        if (parse_snooze_path(path, &snooze_sec) && snooze_sec > 0) {
+            sleep(snooze_sec);
+            gettimeofday(&end, NULL);
+            double exec_len = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1e6;
+            log_msg(LOG_INFO,
+                "\"method\":\"%s\",\"uri\":\"%s\",\"ts\":\"%s\",\"exec_time\":\"%.4f\",\"agent\":\"%s\"",
+                method, path, timebuf, exec_len, agent);
+            char snooze_msg[128];
+            snprintf(snooze_msg, sizeof(snooze_msg), "Snoozed for %d seconds!\n", snooze_sec);
+            send_http_response(client_fd, snooze_msg);
+        } else {
+            gettimeofday(&end, NULL);
+            double exec_len = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1e6;
+            log_msg(LOG_INFO,
+                "\"method\":\"%s\",\"uri\":\"%s\",\"ts\":\"%s\",\"exec_time\":\"%.4f\",\"agent\":\"%s\"",
+                method, path, timebuf, exec_len, agent);
+            send_http_response(client_fd, message);
+        }
         close(client_fd);
     }
 
     // Clean up
-    close(server_fd);
-    log_msg(LOG_INFO, "\"msg\":\"snooze received stop signal; shutting down...\"");
+    time_t stop_now = time(NULL);
+    char stop_timebuf[64];
+    struct tm stop_tm;
+    localtime_r(&stop_now, &stop_tm);
+    strftime(stop_timebuf, sizeof(stop_timebuf), "%Y-%m-%dT%H:%M:%S%z", &stop_tm);
+
+    log_msg(LOG_INFO, "\"msg\":\"snooze received stop signal; shutting down...\",\"ts\":\"%s\"", stop_timebuf);
     return 0;
 }
