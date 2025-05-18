@@ -17,7 +17,7 @@ COPY snooze.c CMakeLists.txt ./
 
 # Create build directory and compile with CMake
 RUN mkdir build && cd build && \
-    cmake -DCMAKE_BUILD_TYPE=MinSizeRel .. && \
+    cmake -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_EXE_LINKER_FLAGS="-static" .. && \
     make -j$(nproc) && \
     strip --strip-all snooze
 
