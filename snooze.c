@@ -167,18 +167,30 @@ static void extract_method(const char *req, char *method, size_t len) {
 // Extracts the User-Agent header from the HTTP request buffer.
 // Returns "unknown" if not found.
 static void extract_user_agent(const char *reqbuf, char *agent, size_t agent_size) {
-    const char *ua = strstr(reqbuf, "User-Agent:");
-    if (ua) {
-        ua += strlen("User-Agent:");
-        // Skip leading whitespace
-        while (*ua == ' ' || *ua == '\t') ua++;
-        size_t i = 0;
-        while (ua[i] && ua[i] != '\r' && ua[i] != '\n' && i < agent_size - 1) {
-            agent[i] = ua[i];
-            i++;
+    const char *ua = reqbuf;
+    const char *end = reqbuf + strlen(reqbuf);
+    int found = 0;
+    while (ua < end) {
+        // Find the start of a line
+        const char *line_end = strstr(ua, "\r\n");
+        if (!line_end) line_end = end;
+        // Case-insensitive search for User-Agent:
+        if ((size_t)(line_end - ua) > 11 && strncasecmp(ua, "User-Agent:", 11) == 0) {
+            ua += 11;
+            while (*ua == ' ' || *ua == '\t') ua++;
+            size_t i = 0;
+            while (ua[i] && ua[i] != '\r' && ua[i] != '\n' && i < agent_size - 1) {
+                agent[i] = ua[i];
+                i++;
+            }
+            agent[i] = '\0';
+            found = 1;
+            break;
         }
-        agent[i] = '\0';
-    } else {
+        if (line_end == end) break;
+        ua = line_end + 2; // Move to next line
+    }
+    if (!found) {
         strncpy(agent, "unknown", agent_size);
         agent[agent_size - 1] = '\0';
     }
@@ -218,6 +230,8 @@ static int parse_snooze_path(const char *path, int *timesec) {
 }
 
 int main(int argc, char *argv[]) {
+    setvbuf(stdout, NULL, _IONBF, 0); // Unbuffered output for stdout
+    setvbuf(stderr, NULL, _IONBF, 0); // Unbuffered output for stderr
     int ret;
     int port;
     const char *message;
@@ -300,9 +314,16 @@ int main(int argc, char *argv[]) {
         localtime_r(&now, &tm);
         strftime(timebuf, sizeof(timebuf), "%Y-%m-%dT%H:%M:%S%z", &tm);
 
-        // Read HTTP request (just first line)
-        char reqbuf[256] = {0};
-        ssize_t n = recv(client_fd, reqbuf, sizeof(reqbuf) - 1, 0);
+        // Read HTTP request
+        char reqbuf[1024] = {0}; // Increase buffer size
+        size_t total = 0;
+        ssize_t n;
+        while ((n = recv(client_fd, reqbuf + total, sizeof(reqbuf) - 1 - total, 0)) > 0) {
+            total += n;
+            reqbuf[total] = '\0';
+            if (strstr(reqbuf, "\r\n\r\n")) break; // End of headers
+            if (total >= sizeof(reqbuf) - 1) break; // Buffer full
+        }
 
         char method[16] = "UNKNOWN";
         if (n > 0) {
