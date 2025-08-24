@@ -291,6 +291,93 @@ static void extract_path(const char *reqbuf, char *path, size_t path_size) {
     path[path_size - 1] = '\0';
 }
 
+/*------------------------------------------------------------
+ * Extract additional HTTP headers as clean JSON fields
+ * Excludes already processed headers like User-Agent
+ * Returns headers as comma-separated JSON key-value pairs
+ * Headers are normalized: lowercase, hyphens -> underscores
+ *-----------------------------------------------------------*/
+static void extract_additional_headers(const char *reqbuf, char *headers_fields, size_t fields_size) {
+    const char *line_start = reqbuf;
+    const char *end = reqbuf + strlen(reqbuf);
+    char temp_buffer[2048] = {0};
+    size_t temp_pos = 0;
+
+    // Skip the first line (HTTP method line)
+    const char *first_line_end = strstr(line_start, "\r\n");
+    if (!first_line_end) {
+        headers_fields[0] = '\0';
+        return;
+    }
+    line_start = first_line_end + 2;
+
+    // Parse each header line
+    while (line_start < end) {
+        const char *line_end = strstr(line_start, "\r\n");
+        if (!line_end) line_end = end;
+
+        // Check if we've reached the end of headers (empty line)
+        if (line_end == line_start) break;
+
+        // Find the colon separator
+        const char *colon = memchr(line_start, ':', line_end - line_start);
+        if (colon && colon < line_end) {
+            // Extract header name
+            size_t name_len = colon - line_start;
+            char header_name[128];
+            if (name_len >= sizeof(header_name)) name_len = sizeof(header_name) - 1;
+            memcpy(header_name, line_start, name_len);
+            header_name[name_len] = '\0';
+
+            // Skip User-Agent since it's already processed separately
+            if (strcasecmp(header_name, "User-Agent") == 0) {
+                goto next_line;
+            }
+
+            // Extract header value (skip colon and leading spaces)
+            const char *value_start = colon + 1;
+            while (value_start < line_end && (*value_start == ' ' || *value_start == '\t'))
+                value_start++;
+
+            size_t value_len = line_end - value_start;
+            char header_value[512];
+            if (value_len >= sizeof(header_value)) value_len = sizeof(header_value) - 1;
+            memcpy(header_value, value_start, value_len);
+            header_value[value_len] = '\0';
+
+            // Convert header name to valid JSON field name (replace hyphens with underscores, lowercase)
+            for (int i = 0; header_name[i]; i++) {
+                if (header_name[i] == '-') {
+                    header_name[i] = '_';
+                } else {
+                    header_name[i] = tolower(header_name[i]);
+                }
+            }
+
+            // Add comma separator if not the first header
+            if (temp_pos > 0) {
+                temp_pos += snprintf(temp_buffer + temp_pos, sizeof(temp_buffer) - temp_pos, ",");
+            }
+
+            // Add header as JSON field (escape quotes in values)
+            temp_pos += snprintf(temp_buffer + temp_pos, sizeof(temp_buffer) - temp_pos,
+                               "\"%s\":\"%s\"", header_name, header_value);
+
+            // Safety check to prevent buffer overflow
+            if (temp_pos >= sizeof(temp_buffer) - 100) break;
+        }
+
+        next_line:
+        // Move to next line
+        if (line_end == end) break;
+        line_start = line_end + 2;
+    }
+
+    // Copy to output buffer
+    strncpy(headers_fields, temp_buffer, fields_size - 1);
+    headers_fields[fields_size - 1] = '\0';
+}
+
 // Helper to check if path matches /snooze/ and extract number
 static int parse_snooze_path(const char *path, int *timesec) {
     if (strncmp(path, "/snooze/", 8) == 0) {
@@ -417,23 +504,45 @@ int main(int argc, char *argv[])
         char path[128];
         extract_path(reqbuf, path, sizeof(path));
 
+        // Extract additional headers (excluding User-Agent which is already in 'agent')
+        char additional_headers[1536];
+        extract_additional_headers(reqbuf, additional_headers, sizeof(additional_headers));
+
         int snooze_sec = 0;
         if (parse_snooze_path(path, &snooze_sec) && snooze_sec > 0) {
             sleep(snooze_sec);
             gettimeofday(&end, NULL);
             double exec_len = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1e6;
-            log_msg(LOG_INFO,
-                "\"method\":\"%s\",\"uri\":\"%s\",\"ts\":\"%s\",\"exec_time\":\"%.4f\",\"agent\":\"%s\"",
-                method, path, timebuf, exec_len, agent);
+
+            // Log with additional headers as top-level fields
+            if (strlen(additional_headers) > 0) {
+                log_msg(LOG_INFO,
+                    "\"method\":\"%s\",\"uri\":\"%s\",\"ts\":\"%s\",\"exec_time\":\"%.4f\",\"agent\":\"%s\",%s",
+                    method, path, timebuf, exec_len, agent, additional_headers);
+            } else {
+                log_msg(LOG_INFO,
+                    "\"method\":\"%s\",\"uri\":\"%s\",\"ts\":\"%s\",\"exec_time\":\"%.4f\",\"agent\":\"%s\"",
+                    method, path, timebuf, exec_len, agent);
+            }
+
             char snooze_msg[128];
             snprintf(snooze_msg, sizeof(snooze_msg), "Snoozed for %d seconds!\n", snooze_sec);
             send_http_response(client_fd, snooze_msg);
         } else {
             gettimeofday(&end, NULL);
             double exec_len = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1e6;
-            log_msg(LOG_INFO,
-                "\"method\":\"%s\",\"uri\":\"%s\",\"ts\":\"%s\",\"exec_time\":\"%.4f\",\"agent\":\"%s\"",
-                method, path, timebuf, exec_len, agent);
+
+            // Log with additional headers as top-level fields
+            if (strlen(additional_headers) > 0) {
+                log_msg(LOG_INFO,
+                    "\"method\":\"%s\",\"uri\":\"%s\",\"ts\":\"%s\",\"exec_time\":\"%.4f\",\"agent\":\"%s\",%s",
+                    method, path, timebuf, exec_len, agent, additional_headers);
+            } else {
+                log_msg(LOG_INFO,
+                    "\"method\":\"%s\",\"uri\":\"%s\",\"ts\":\"%s\",\"exec_time\":\"%.4f\",\"agent\":\"%s\"",
+                    method, path, timebuf, exec_len, agent);
+            }
+
             send_http_response(client_fd, message); /* graceful_close() inside */
         }
     }
