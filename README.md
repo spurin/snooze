@@ -1,46 +1,36 @@
+<!-- filepath: /Users/ganapathichidambaram/git/snooze/README.md -->
 <h1 align="center">snooze: Chilling but ready to serve your needs 💤</h1>
 
 <p align="center">
   <img src="snooze_logo.svg" width="30%" alt="Snooze Logo">
 </p>
 
-Ever wanted an HTTP server that does *almost nothing*, but does it with style? **snooze** is here to serve you-literally. Based on the same ultra-minimal philosophy as [idle](https://github.com/spurin/idle), **snooze** listens on a single port, sends a static response, and then goes right back to its nap.
+Ever wanted an HTTP server that does *almost nothing*, but does it with style? **snooze** is here to serve you-literally. Based on the same ultra-minimal philosophy as lightweight testing utilities, **snooze** listens on a single port, sends a static response, and then goes right back to its nap.
 
 ## Features
 
-- **Ultra-Lightweight**: Built on a `scratch` base, compiled statically, and stripped for maximum minimalism.
+- **Ultra-Lightweight**: Small single-binary server with minimal dependencies.
 - **Default Port**: `80`, so you don’t have to think too hard.
 - **Default Message**: `"Hello from snooze!"`, because sometimes that’s all you need.
 - **Flexible Overriding**:
-  - **Environment Variables**: `PORT`, `MESSAGE`
-    (Highest priority: if these are set, they override everything else.)
-  - **Command-Line Flags**: `--port=YOUR_PORT`, `--message=YOUR_MESSAGE`
-    (Used only if environment variables are **not** set for those fields. You can set either one independently without affecting the other.)
+  - **Environment Variables**: `PORT`, `MESSAGE` (Highest priority)
+  - **Command-Line Flags**: `--port=YOUR_PORT`, `--message=YOUR_MESSAGE` (Used only if env var not set)
   - **Defaults**: If neither environment variables nor command-line flags are provided, snooze uses `80` and `"Hello from snooze!"`.
 - **Graceful Shutdown**: Handles `SIGINT` and `SIGTERM`, letting you put it to bed without fuss.
-- **Prebuilt Images**: You can pull directly with Docker, Kubernetes, or any OCI-compatible tool:
-```plaintext
-docker pull spurin/snooze:latest
-```
-## Build (Optional)
+- **Structured JSON logging**: Easy ingestion by logging systems.
 
-If you want to build **snooze** yourself you need the following dependencies:
+## Quick note
+This repository contains a tiny HTTP server intended for testing. See the docs and examples below for how to run it locally, in Docker, or in Kubernetes.
 
-- gcc or clang
-- make
-- cmake
+## Docker
 
-To build **snooze**:
+Prebuilt image (if available):
 
 ```bash
-cd build/
-cmake ..
-make
+docker pull spurin/snooze:latest
 ```
 
-then you will find the _snooze_ binary in the `build/` directory.
-
-## Quick Start (Docker)
+### Quick Start (Docker)
 
 **Easiest**: run with default port (80) and message:
 
@@ -104,7 +94,23 @@ curl http://localhost:7070
 # Output: "Hello from snooze!"
 ```
 
----
+## Build (Optional)
+
+If you want to build **snooze** yourself you need the following dependencies:
+
+- gcc or clang
+- make
+- cmake
+
+To build **snooze**:
+
+```bash
+cd build/
+cmake ..
+make
+```
+
+then you will find the _snooze_ binary in the `build/` directory.
 
 ## Kubernetes Examples
 
@@ -401,15 +407,62 @@ kubectl delete ingress snooze-colors-ingress
 ## Why snooze?
 
 - **Test & Debug**: Perfect for verifying Kubernetes Ingress, load balancers, or quick dev checks.
-- **Simplicity**: No overhead from large frameworks-just a tiny compiled binary.
-- **Minimal Attack Surface**: Less code, fewer dependencies-less to go wrong.
+- **Simplicity**: No overhead from large frameworks—just a tiny compiled binary.
+- **Minimal Attack Surface**: Less code, fewer dependencies—less to go wrong.
 - **Education**: Great example of how to create a statically linked, scratch-based HTTP container.
 
 ## License
 
 This project is released into the public domain under [Unlicense](http://unlicense.org).
-Feel free to do whatever you want with it-no strings attached.
+Feel free to do whatever you want with it—no strings attached.
 
 ## Thanks! 🙏
 
 [@edsiper](https://github.com/edsiper) [@ganapathichidambaram](https://github.com/ganapathichidambaram)
+
+## Snooze Delay Behavior
+
+- Endpoint: `GET /snooze/N` where N is a non-negative integer number of seconds.
+- The server sleeps for N seconds before sending the response. This simulates a delayed backend.
+- `exec_time` for a request measures the total elapsed time for handling that request (including any snooze delay) and is recorded after the response is handled.
+- Example: a `/snooze/1` request will yield `exec_time` ≈ `"1.0000"` (formatted with four decimal places).
+
+## Monitoring & Logging (Detailed)
+
+Logs are emitted as JSON objects. Every log entry contains a fixed prefix and may include additional fields specific to the event. The fixed fields are:
+
+- `ts`: ISO8601 timestamp (string)
+- `level`: `error` | `info` | `debug` (string)
+- `subsystem`: Logical subsystem that produced the log (e.g. `net`, `app`, `http`) (string)
+- `exec_time`: A quoted string formatted with four decimals (seconds) that represents the time value relevant to the event
+
+Notes on `exec_time` semantics:
+
+- For HTTP request logs (`subsystem":"http"`), `exec_time` is the total elapsed time to process that request, including any snooze delay. It is measured as seconds with four decimal places and always emitted in double-quotes, e.g. `"1.0000"`.
+- For lifecycle and system events (subsystem `app` or `net`), `exec_time` represents a short duration relevant to the event:
+  - The `start` log uses elapsed time since process start.
+  - When a shutdown signal is received, the server emits `shutdown_requested` with `exec_time` = elapsed since process start, then after completing shutdown it emits a final `shutdown` log whose `exec_time` is the duration taken to complete shutdown (both formatted as quoted strings with four decimals).
+- Error logs include the relevant `op` and `error` fields in the JSON body.
+
+Additional fields in request logs:
+
+- `method`: HTTP method (string)
+- `path` or `uri`: Request path (string)
+- `agent`: `User-Agent` value when present (string)
+- Additional headers are included as key/value pairs in the JSON body when present
+
+Example request log (single-line JSON):
+
+{"ts":"2025-08-24T12:34:56+0000","level":"info","subsystem":"http","exec_time":"1.0000","method":"GET","path":"/snooze/1","agent":"curl/7.68.0","Accept":"*/*"}
+
+Tips
+
+- Use a JSON-aware log collector or simple jq to parse and aggregate logs:
+
+```bash
+# Example: count requests and avg exec_time
+cat logs.json | jq -r -c '. | select(.subsystem=="http") | {exec_time: .exec_time}' | \
+  jq -s 'map(tonumber(.exec_time)) | {count: length, avg: (add/length)}'
+```
+
+(Adapt tooling to your logging pipeline; exec_time is emitted as a quoted string.)
