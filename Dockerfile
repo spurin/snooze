@@ -32,6 +32,8 @@ COPY --from=build /app/build/snooze /snooze
 # Expose the default HTTP port (80)
 EXPOSE 80
 
+# Allow snooze to be found in PATH
+ENV PATH=/
+
 # By default, run on port 80 with the default message.
 ENTRYPOINT ["/snooze"]
-
