@@ -1,6 +1,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -84,6 +85,130 @@ static void parse_arguments(int argc, char *argv[],
 }
 
 /*------------------------------------------------------------
+ *  Helpers to read full HTTP request once and log it in ONE
+ *  contiguous block. Logging is enabled by default; no limits.
+ *
+ *  Strategy:
+ *    1) Read until "\r\n\r\n" (end of headers), blocking.
+ *    2) If Content-Length is present, read exactly that many
+ *       body bytes (blocking). Otherwise, log only the headers
+ *       and any extra bytes already received.
+ *    3) Print a single dump framed by "=== snooze request dump".
+ *-----------------------------------------------------------*/
+static size_t find_headers_end(const char *buf, size_t len) {
+    if (len < 4) return (size_t)0;
+    for (size_t i = 0; i + 3 < len; i++) {
+        if (buf[i] == '\r' && buf[i+1] == '\n' && buf[i+2] == '\r' && buf[i+3] == '\n')
+            return i + 4; /* index just past the CRLF CRLF */
+    }
+    return (size_t)0;
+}
+
+static size_t parse_content_length(const char *hdrs, size_t hdr_len) {
+    /* simple, case-insensitive scan for "Content-Length:" */
+    const char *p = hdrs;
+    const char *end = hdrs + hdr_len;
+    while (p < end) {
+        const char *eol = memchr(p, '\n', (size_t)(end - p));
+        if (!eol) eol = end;
+        if ((size_t)(eol - p) >= 15 && strncasecmp(p, "Content-Length:", 15) == 0) {
+            const char *v = p + 15;
+            while (v < eol && (*v == ' ' || *v == '\t')) v++;
+            return (size_t)strtoull(v, NULL, 10);
+        }
+        p = (eol < end) ? eol + 1 : end;
+    }
+    return 0;
+}
+
+static int recv_fully(int fd, char *buf, size_t want) {
+    size_t got = 0;
+    while (got < want) {
+        ssize_t n = recv(fd, buf + got, want - got, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1; /* peer closed early */
+        got += (size_t)n;
+    }
+    return 0;
+}
+
+static void log_full_request_blocking(int sock)
+{
+    /* Step 0: capture peer info for banner */
+    struct sockaddr_in peer;
+    socklen_t plen = sizeof(peer);
+    char ip[INET_ADDRSTRLEN] = "unknown";
+    int  port = 0;
+    if (getpeername(sock, (struct sockaddr*)&peer, &plen) == 0) {
+        inet_ntop(AF_INET, &peer.sin_addr, ip, sizeof(ip));
+        port = ntohs(peer.sin_port);
+    }
+
+    /* Step 1: read until end of headers */
+    size_t cap = 8192;                         /* grows as needed */
+    size_t len = 0;
+    char *req = (char*)malloc(cap);
+    if (!req) return;
+
+    size_t hdr_end = 0;
+    for (;;) {
+        if (len == cap) {                      /* grow buffer */
+            cap *= 2;
+            char *tmp = (char*)realloc(req, cap);
+            if (!tmp) { free(req); return; }
+            req = tmp;
+        }
+        ssize_t n = recv(sock, req + len, cap - len, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            free(req);
+            return;
+        }
+        if (n == 0) break;                     /* peer closed */
+        len += (size_t)n;
+        hdr_end = find_headers_end(req, len);
+        if (hdr_end) break;                    /* have full headers */
+    }
+
+    /* Step 2: if Content-Length present, read the rest of the body exactly */
+    size_t body_len = 0;
+    size_t already_body = 0;
+    if (hdr_end) {
+        body_len = parse_content_length(req, hdr_end);
+        already_body = len > hdr_end ? (len - hdr_end) : 0;
+
+        if (body_len > already_body) {
+            size_t need = body_len - already_body;
+            /* ensure capacity */
+            if (len + need > cap) {
+                size_t new_cap = cap;
+                while (len + need > new_cap) new_cap *= 2;
+                char *tmp = (char*)realloc(req, new_cap);
+                if (!tmp) { free(req); return; }
+                req = tmp; cap = new_cap;
+            }
+            if (recv_fully(sock, req + len, need) == -1) {
+                /* couldn't complete body; log whatever we have */
+                need = 0;
+            }
+            len += need;
+        }
+    }
+
+    /* Step 3: single clean dump */
+    fprintf(stderr, "=== snooze request dump from %s:%d ===\n", ip, port);
+    (void)fwrite(req, 1, len, stderr);
+    if (len == 0) fputc('\n', stderr);  /* ensure a blank line block if nothing */
+    fprintf(stderr, "=== end request dump ===\n");
+    fflush(stderr);
+
+    free(req);
+}
+
+/*------------------------------------------------------------
  *  Robust send() helper
  *     – loops until every byte is written or an error occurs
  *-----------------------------------------------------------*/
@@ -107,32 +232,21 @@ static int send_all(int sock, const char *buf, size_t len)
 /*------------------------------------------------------------
  *  graceful_close()
  *
- *  Why?  If we close() a socket that still contains unread
- *  *incoming* data (the remainder of the client’s HTTP request),
- *  Linux sends a TCP RST instead of a FIN.  Browsers then report
- *  ERR_CONTENT_LENGTH_MISMATCH even though we transmitted the
- *  whole body.  The fix is:
- *
- *    1.  shutdown(…, SHUT_WR)  – we’re done sending
- *    2.  Drain any leftover bytes with non-blocking recv()
- *    3.  close()
+ *  Half-close for write, drain unread data quietly (no logging),
+ *  then close. Avoids TCP RST/ERR_CONTENT_LENGTH_MISMATCH.
  *-----------------------------------------------------------*/
 static void graceful_close(int sock)
 {
-    shutdown(sock, SHUT_WR);          /* half-close: no more data to send */
+    shutdown(sock, SHUT_WR);
 
     char buf[256];
     for (;;) {
         ssize_t n = recv(sock, buf, sizeof(buf), MSG_DONTWAIT);
-        if (n > 0)                      /* still reading – discard & loop */
-            continue;
-        if (n == 0)                     /* peer closed his side           */
-            break;
-        if (errno == EAGAIN || errno == EWOULDBLOCK)
-            break;                      /* nothing left to read           */
-        if (errno == EINTR)
-            continue;                   /* interrupted – retry            */
-        break;                          /* any other error – just quit    */
+        if (n > 0) continue;
+        if (n == 0) break;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+        if (errno == EINTR) continue;
+        break;
     }
 
     close(sock);
@@ -140,18 +254,11 @@ static void graceful_close(int sock)
 
 /**
  * Minimal HTTP response helper
- *
- *  • Handles arbitrary-length bodies (taken from MESSAGE env-var or CLI).
- *  • Sets an accurate Content-Length header.
- *  • Sends headers first, then body, using send_all() to survive partial
- *    writes on slow connections.
- *  • Keeps UTF-8 intact – no truncation.
  */
 void send_http_response(int client_sock, const char *message)
 {
     const size_t body_len = strlen(message);
 
-    /* Build ONLY the header in a small stack buffer */
     char header[256];
     int hdr_len = snprintf(header, sizeof(header),
         "HTTP/1.1 200 OK\r\n"
@@ -162,14 +269,12 @@ void send_http_response(int client_sock, const char *message)
         "\r\n",
         body_len);
 
-    /* snprintf() returns the would-be length (excluding \0). */
     if (hdr_len < 0 || (size_t)hdr_len >= sizeof(header)) {
         fprintf(stderr, "header buffer too small\n");
         graceful_close(client_sock);
         return;
     }
 
-    /* 1) send headers, 2) send body, 3) close politely         */
     if (send_all(client_sock, header, (size_t)hdr_len) == -1 ||
         send_all(client_sock, message, body_len)        == -1) {
         graceful_close(client_sock);
@@ -228,14 +333,16 @@ int main(int argc, char *argv[])
     while (keep_running) {
         int client_fd = accept(server_fd, NULL, NULL);
         if (client_fd < 0) {
-            /* If interrupted by a signal (e.g., Ctrl-C), break cleanly */
             if (errno == EINTR) break;
             perror("accept");
             continue;
         }
 
-        /* Send minimal HTTP response and close */
-        send_http_response(client_fd, message);   /* graceful_close() inside */
+        /* ONE clean block with the full request (headers + body if Content-Length). */
+        log_full_request_blocking(client_fd);
+
+        /* Respond and close. */
+        send_http_response(client_fd, message);
     }
 
     /* Clean up */

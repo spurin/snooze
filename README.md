@@ -11,6 +11,7 @@ Ever wanted an HTTP server that does *almost nothing*, but does it with style? *
 - **Ultra-Lightweight**: Built on a `scratch` base, compiled statically, and stripped for maximum minimalism.
 - **Default Port**: `80`, so you don’t have to think too hard.
 - **Default Message**: `"Hello from snooze!"`, because sometimes that’s all you need.
+- **Full Request Logging (default)**: Each request is logged as **one contiguous block** (request line, headers, and body if `Content-Length` is present). No flags or env vars required.
 - **Flexible Overriding**:
   - **Environment Variables**: `PORT`, `MESSAGE`
     (Highest priority: if these are set, they override everything else.)
@@ -22,6 +23,29 @@ Ever wanted an HTTP server that does *almost nothing*, but does it with style? *
 ```plaintext
 docker pull spurin/snooze:latest
 ```
+
+---
+
+## Logging
+
+Snooze **logs the full incoming HTTP request by default** as a single block:
+
+```
+=== snooze request dump from 172.64.66.1:56754 ===
+GET / HTTP/1.1
+Host: localhost:8080
+User-Agent: curl/8.7.1
+Accept: */*
+
+=== end request dump ===
+```
+
+If the client sends a body with a `Content-Length`, snooze will read and log **exactly that many bytes** (no truncation). If no `Content-Length` is present, snooze logs the headers (and any bytes that arrived with them) and immediately responds.
+
+> **Heads‑up:** Raw logging captures everything the client sent (including Authorization/Cookie headers and bodies). Handle logs with care.
+
+---
+
 ## Build (Optional)
 
 If you want to build **snooze** yourself you need the following dependencies:
@@ -53,6 +77,12 @@ Check in your browser at `http://localhost` or:
 ```bash
 curl http://localhost
 # Output: "Hello from snooze!"
+```
+
+View the **container logs** to see the request dump:
+
+```bash
+docker logs <container-id>
 ```
 
 ### Override Using Environment Variables
